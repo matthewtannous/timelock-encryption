@@ -1,7 +1,8 @@
-use drand_verify::{G2PubkeyRfc, Pubkey};
+use blst::min_sig::{PublicKey, Signature};
 use hex_literal::hex;
 use reqwest::Error;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
@@ -60,12 +61,7 @@ pub async fn get_beacon(round: u64) -> Beacon {
     let (resp1, resp2, resp3) = response.unwrap();
 
     if resp1 == resp2 && resp2 == resp3 {
-        let pk: G2PubkeyRfc = G2PubkeyRfc::from_fixed(QUICKNET_PUBLIC_KEY).unwrap();
-        // Validate
-        let result = pk
-            .verify(resp1.round, b"", &hex::decode(&resp1.signature).unwrap())
-            .unwrap();
-        if result {
+        if verify_beacon(&resp1) {
             // Add result to HashMap
             BEACON_CACHE.lock().unwrap().insert(round, resp2); // all responses are equal
             resp1
@@ -75,4 +71,26 @@ pub async fn get_beacon(round: u64) -> Beacon {
     } else {
         panic!("Responses do not have the same value.");
     }
+}
+
+fn verify_beacon(beacon: &Beacon) -> bool {
+    let pk = PublicKey::from_bytes(&QUICKNET_PUBLIC_KEY).expect("Invalid Quicknet public key");
+
+    let signature_bytes = hex::decode(&beacon.signature).expect("Invalid signature hex");
+
+    let signature = Signature::from_bytes(&signature_bytes).expect("Invalid signature encoding");
+
+    // Quicknet message = SHA-256(round.to_be_bytes())
+    let message = Sha256::digest(beacon.round.to_be_bytes());
+
+    let result = signature.verify(
+        true,
+        &message,
+        b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_",
+        &[],
+        &pk,
+        true,
+    );
+
+    result == blst::BLST_ERROR::BLST_SUCCESS
 }
